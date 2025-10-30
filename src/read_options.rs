@@ -72,8 +72,7 @@ impl JsReaderOptions {
 
         if let Some(columns) = &self.columns {
             let parquet_schema = builder.parquet_schema();
-            let projection_mask = generate_projection_mask(columns, parquet_schema)?;
-
+            let projection_mask = JsReaderOptions::generate_projection_mask(columns, parquet_schema)?;
             builder = builder.with_projection(projection_mask);
         }
 
@@ -83,6 +82,48 @@ impl JsReaderOptions {
 
         Ok(builder)
     }
+
+    pub fn generate_projection_mask<S: AsRef<str>>(
+        columns: &[S],
+        pq_schema: &SchemaDescriptor,
+    ) -> Result<ProjectionMask> {
+        let col_paths = pq_schema
+            .columns()
+            .iter()
+            .map(|col| col.path().string())
+            .collect::<Vec<_>>();
+        let indices: Vec<usize> = columns
+            .iter()
+            .map(|col| {
+                let col = col.as_ref();
+                let field_indices: Vec<usize> = col_paths
+                    .iter()
+                    .enumerate()
+                    .filter(|(_idx, path)| {
+                        // identical OR the path starts with the column AND the substring is immediately followed by the
+                        // path separator
+                        path.as_str() == col
+                            || path.starts_with(col) && {
+                                let left_index = path.find(col).unwrap();
+                                path.chars().nth(left_index + col.len()).unwrap() == '.'
+                            }
+                    })
+                    .map(|(idx, _)| idx)
+                    .collect();
+                if field_indices.is_empty() {
+                    Err(ParquetWasmError::UnknownColumn(col.to_string()))
+                } else {
+                    Ok(field_indices)
+                }
+            })
+            .collect::<Result<Vec<Vec<usize>>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        let projection_mask = ProjectionMask::leaves(pq_schema, indices);
+        Ok(projection_mask)
+    }
+
 }
 
 impl TryFrom<ReaderOptions> for JsReaderOptions {
@@ -93,43 +134,3 @@ impl TryFrom<ReaderOptions> for JsReaderOptions {
     }
 }
 
-fn generate_projection_mask<S: AsRef<str>>(
-    columns: &[S],
-    pq_schema: &SchemaDescriptor,
-) -> Result<ProjectionMask> {
-    let col_paths = pq_schema
-        .columns()
-        .iter()
-        .map(|col| col.path().string())
-        .collect::<Vec<_>>();
-    let indices: Vec<usize> = columns
-        .iter()
-        .map(|col| {
-            let col = col.as_ref();
-            let field_indices: Vec<usize> = col_paths
-                .iter()
-                .enumerate()
-                .filter(|(_idx, path)| {
-                    // identical OR the path starts with the column AND the substring is immediately followed by the
-                    // path separator
-                    path.as_str() == col
-                        || path.starts_with(col) && {
-                            let left_index = path.find(col).unwrap();
-                            path.chars().nth(left_index + col.len()).unwrap() == '.'
-                        }
-                })
-                .map(|(idx, _)| idx)
-                .collect();
-            if field_indices.is_empty() {
-                Err(ParquetWasmError::UnknownColumn(col.to_string()))
-            } else {
-                Ok(field_indices)
-            }
-        })
-        .collect::<Result<Vec<Vec<usize>>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-    let projection_mask = ProjectionMask::leaves(pq_schema, indices);
-    Ok(projection_mask)
-}

@@ -25,16 +25,23 @@ pub fn read_parquet(parquet_file: Vec<u8>, options: JsReaderOptions) -> Result<T
         builder = builder.with_batch_size(batch_size);
     }
 
-    if let Some(row_groups) = options.row_groups {
-        builder = builder.with_row_groups(row_groups);
-    }
-
     if let Some(limit) = options.limit {
         builder = builder.with_limit(limit);
     }
 
     if let Some(offset) = options.offset {
         builder = builder.with_offset(offset);
+    }
+
+    if let Some(columns) = &options.columns {
+        let parquet_schema = builder.parquet_schema();
+        let projection_mask = JsReaderOptions::generate_projection_mask(columns, parquet_schema)?;
+
+        builder = builder.with_projection(projection_mask);
+    }    
+
+    if let Some(row_groups) = options.row_groups {
+        builder = builder.with_row_groups(row_groups);
     }
 
     // Create Arrow reader
